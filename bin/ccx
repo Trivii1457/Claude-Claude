@@ -1,0 +1,414 @@
+#!/usr/bin/env sh
+# ccx — gestor de cuentas y proyectos para Claude Code
+# -----------------------------------------------------------------------------
+# Un lanzador sencillo que permite tener VARIAS cuentas de Claude Code en el
+# mismo PC (cada una aislada con CLAUDE_CONFIG_DIR), registrar proyectos locales
+# y pedirle al propio Claude que genere sus archivos de memoria (CLAUDE.md, etc).
+#
+# POSIX sh. Funciona en bash, zsh, Git Bash (MSYS2) y WSL.
+# -----------------------------------------------------------------------------
+set -eu
+
+CCX_VERSION="0.1.0"
+
+# --- Rutas de este script (para encontrar templates/) ------------------------
+CCX_BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+CCX_LIB=$(CDPATH= cd -- "$CCX_BIN_DIR/.." && pwd)
+TEMPLATES_DIR="$CCX_LIB/templates"
+
+# --- Directorios de datos ----------------------------------------------------
+: "${CCX_HOME:=${XDG_CONFIG_HOME:-$HOME/.config}/ccx}"
+ACCOUNTS_DIR="$CCX_HOME/accounts"
+PROJECTS_FILE="$CCX_HOME/projects.tsv"
+ACTIVE_FILE="$CCX_HOME/active"
+TAB=$(printf '\t')
+
+# --- Colores (solo si hay terminal) ------------------------------------------
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_B=$(printf '\033[1m');  C_D=$(printf '\033[2m');   C_R=$(printf '\033[0m')
+  C_G=$(printf '\033[32m'); C_Y=$(printf '\033[33m');  C_RED=$(printf '\033[31m')
+  C_C=$(printf '\033[36m')
+else
+  C_B=; C_D=; C_R=; C_G=; C_Y=; C_RED=; C_C=
+fi
+
+msg()  { printf '%s\n' "$*"; }
+info() { printf '%s%s%s\n' "$C_C" "$*" "$C_R"; }
+ok()   { printf '%s\342\234\223%s %s\n' "$C_G" "$C_R" "$*"; }
+warn() { printf '%s!%s %s\n' "$C_Y" "$C_R" "$*" >&2; }
+die()  { printf '%s\342\234\227%s %s\n' "$C_RED" "$C_R" "$*" >&2; exit 1; }
+
+# --- Utilidades --------------------------------------------------------------
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_dirs() {
+  mkdir -p "$ACCOUNTS_DIR"
+  [ -f "$PROJECTS_FILE" ] || : > "$PROJECTS_FILE"
+}
+
+check_claude() {
+  have claude || die "No encuentro 'claude' en el PATH. Instala Claude Code: https://code.claude.com/docs/en/setup"
+}
+
+# Bajo Git Bash/MSYS el binario 'claude' es de Windows y espera rutas de
+# Windows. Convertimos el config dir a ruta nativa solo en ese caso.
+native_path() {
+  if [ -n "${MSYSTEM:-}" ] && have cygpath; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
+
+# Normaliza una ruta a POSIX (para 'cd' en Git Bash cuando el usuario pasa C:\...)
+posix_path() {
+  if [ -n "${MSYSTEM:-}" ] && have cygpath; then cygpath -u "$1"; else printf '%s' "$1"; fi
+}
+
+valid_name() {
+  case "$1" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+account_dir()    { printf '%s/%s' "$ACCOUNTS_DIR" "$1"; }
+account_exists() { [ -d "$(account_dir "$1")" ]; }
+get_active()     { [ -f "$ACTIVE_FILE" ] && cat "$ACTIVE_FILE" || printf ''; }
+
+# --- Registro de proyectos (name <TAB> path <TAB> account) -------------------
+project_lookup() { # imprime "path<TAB>account"; retorna 1 si no existe
+  _name="$1"
+  [ -f "$PROJECTS_FILE" ] || return 1
+  while IFS="$TAB" read -r pn pp pa; do
+    [ "$pn" = "$_name" ] || continue
+    printf '%s\t%s' "$pp" "$pa"
+    return 0
+  done < "$PROJECTS_FILE"
+  return 1
+}
+
+project_remove_line() {
+  _name="$1"
+  [ -f "$PROJECTS_FILE" ] || return 0
+  _tmp="$PROJECTS_FILE.tmp.$$"
+  while IFS="$TAB" read -r pn pp pa; do
+    [ "$pn" = "$_name" ] && continue
+    printf '%s\t%s\t%s\n' "$pn" "$pp" "$pa"
+  done < "$PROJECTS_FILE" > "$_tmp"
+  mv "$_tmp" "$PROJECTS_FILE"
+}
+
+# --- Lanzar Claude Code con una cuenta en un directorio ----------------------
+launch_claude() {
+  _acc="$1"; _wd="$2"; shift 2
+  check_claude
+  account_exists "$_acc" || die "La cuenta '$_acc' no existe. Créala con: ccx account add $_acc"
+  _wd=$(posix_path "$_wd")
+  [ -d "$_wd" ] || die "El directorio no existe: $_wd"
+  _cfg=$(native_path "$(account_dir "$_acc")")
+  info "Cuenta: $_acc   |   Dir: $_wd"
+  cd "$_wd" || die "No pude entrar a: $_wd"
+  export CLAUDE_CONFIG_DIR="$_cfg"
+  exec claude "$@"
+}
+
+# =============================================================================
+# Comandos: account
+# =============================================================================
+cmd_account_add() {
+  _name="${1:-}"
+  [ -n "$_name" ] || die "Uso: ccx account add <nombre>"
+  valid_name "$_name" || die "Nombre inválido. Solo letras, números y . _ -"
+  ensure_dirs
+  _dir=$(account_dir "$_name")
+  if account_exists "$_name"; then
+    warn "La cuenta '$_name' ya existe ($_dir). Reabriendo login…"
+  else
+    mkdir -p "$_dir"
+    ok "Cuenta '$_name' creada en $_dir"
+  fi
+  # La primera cuenta pasa a ser la activa por defecto
+  if [ ! -s "$ACTIVE_FILE" ]; then printf '%s\n' "$_name" > "$ACTIVE_FILE"; fi
+  check_claude
+  info "Abriendo Claude Code para iniciar sesión en esta cuenta…"
+  info "Haz login en el navegador. Cuando termines, escribe /exit para volver aquí."
+  export CLAUDE_CONFIG_DIR="$(native_path "$_dir")"
+  claude || true
+  ok "Cuenta '$_name' lista."
+}
+
+cmd_account_ls() {
+  ensure_dirs
+  _active=$(get_active)
+  _found=0
+  for d in "$ACCOUNTS_DIR"/*; do
+    [ -d "$d" ] || continue
+    _found=1
+    n=$(basename "$d")
+    if [ "$n" = "$_active" ]; then mark="$C_G*$C_R"; else mark=" "; fi
+    if [ -f "$d/.credentials.json" ] || [ -f "$d/.claude.json" ]; then
+      state="$C_G(sesión iniciada)$C_R"
+    else
+      state="$C_D(sin login)$C_R"
+    fi
+    printf ' %s %s%s%s  %s\n' "$mark" "$C_B" "$n" "$C_R" "$state"
+  done
+  [ "$_found" = 1 ] || msg "No hay cuentas todavía. Crea una con: ccx account add <nombre>"
+}
+
+cmd_account_rm() {
+  _name="${1:-}"
+  [ -n "$_name" ] || die "Uso: ccx account rm <nombre>"
+  account_exists "$_name" || die "La cuenta '$_name' no existe."
+  printf 'Eliminar la cuenta "%s" y su login (%s)? [y/N] ' "$_name" "$(account_dir "$_name")"
+  read -r ans || ans=n
+  case "$ans" in
+    y|Y|s|S|si|Si|SI|yes|Yes)
+      rm -rf "$(account_dir "$_name")"
+      if [ "$(get_active)" = "$_name" ]; then : > "$ACTIVE_FILE"; fi
+      ok "Cuenta '$_name' eliminada." ;;
+    *) msg "Cancelado." ;;
+  esac
+}
+
+cmd_account_use() {
+  _name="${1:-}"
+  [ -n "$_name" ] || die "Uso: ccx account use <nombre>"
+  account_exists "$_name" || die "La cuenta '$_name' no existe."
+  ensure_dirs
+  printf '%s\n' "$_name" > "$ACTIVE_FILE"
+  ok "Cuenta activa: $_name"
+}
+
+cmd_account_which() {
+  _a=$(get_active)
+  if [ -n "$_a" ]; then msg "$_a"; else msg "(ninguna)"; fi
+}
+
+# =============================================================================
+# Comandos: project
+# =============================================================================
+cmd_project_add() {
+  _name=""; _path=""; _acc=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --account|-a) _acc="${2:-}"; shift 2 ;;
+      *) if [ -z "$_name" ]; then _name="$1"; elif [ -z "$_path" ]; then _path="$1"; fi; shift ;;
+    esac
+  done
+  [ -n "$_name" ] || die "Uso: ccx project add <nombre> [<ruta>] [--account <cuenta>]"
+  valid_name "$_name" || die "Nombre de proyecto inválido. Solo letras, números y . _ -"
+  [ -n "$_path" ] || _path="$(pwd)"
+  # Absolutizar
+  case "$_path" in
+    /*|[A-Za-z]:*) : ;;  # ya es absoluta (POSIX o Windows)
+    *) _path="$(cd "$_path" 2>/dev/null && pwd)" || die "Ruta no encontrada: $_path" ;;
+  esac
+  _path=$(posix_path "$_path")
+  [ -d "$_path" ] || die "La ruta no es un directorio: $_path"
+  [ -n "$_acc" ] || _acc="$(get_active)"
+  [ -n "$_acc" ] || die "No hay cuenta activa. Pasa --account <cuenta>."
+  account_exists "$_acc" || die "La cuenta '$_acc' no existe."
+  ensure_dirs
+  if project_lookup "$_name" >/dev/null 2>&1; then project_remove_line "$_name"; fi
+  printf '%s\t%s\t%s\n' "$_name" "$_path" "$_acc" >> "$PROJECTS_FILE"
+  ok "Proyecto '$_name' -> $_path  (cuenta: $_acc)"
+}
+
+cmd_project_ls() {
+  ensure_dirs
+  if [ ! -s "$PROJECTS_FILE" ]; then
+    msg "No hay proyectos registrados. Añade uno con: ccx project add <nombre> <ruta>"
+    return 0
+  fi
+  while IFS="$TAB" read -r pn pp pa; do
+    [ -n "$pn" ] || continue
+    if [ -d "$pp" ]; then miss=""; else miss=" $C_RED(no existe)$C_R"; fi
+    printf ' %s%s%s  %s%s%s  %s[%s]%s%s\n' "$C_B" "$pn" "$C_R" "$C_D" "$pp" "$C_R" "$C_C" "$pa" "$C_R" "$miss"
+  done < "$PROJECTS_FILE"
+}
+
+cmd_project_rm() {
+  _name="${1:-}"
+  [ -n "$_name" ] || die "Uso: ccx project rm <nombre>"
+  project_lookup "$_name" >/dev/null 2>&1 || die "Proyecto '$_name' no encontrado."
+  project_remove_line "$_name"
+  ok "Proyecto '$_name' quitado del registro (los archivos del proyecto no se tocan)."
+}
+
+# =============================================================================
+# Comandos: open / run / init
+# =============================================================================
+cmd_open() {
+  _name="${1:-}"
+  [ -n "$_name" ] || die "Uso: ccx open <proyecto> [-- <args de claude>]"
+  shift
+  if [ "${1:-}" = "--" ]; then shift; fi
+  _res=$(project_lookup "$_name") || die "Proyecto '$_name' no encontrado. Mira: ccx project ls"
+  _pp=${_res%%"$TAB"*}
+  _pa=${_res#*"$TAB"}
+  launch_claude "$_pa" "$_pp" "$@"
+}
+
+cmd_run() {
+  _acc=""
+  if [ $# -gt 0 ] && [ "$1" != "--" ]; then _acc="$1"; shift; fi
+  [ -n "$_acc" ] || _acc="$(get_active)"
+  [ -n "$_acc" ] || die "No hay cuenta. Uso: ccx run <cuenta> [-- <args de claude>]"
+  if [ "${1:-}" = "--" ]; then shift; fi
+  launch_claude "$_acc" "$(pwd)" "$@"
+}
+
+cmd_init() {
+  _target="."; _headless=0; _acc=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --headless|-p) _headless=1; shift ;;
+      --account|-a)  _acc="${2:-}"; shift 2 ;;
+      *) _target="$1"; shift ;;
+    esac
+  done
+  if _res=$(project_lookup "$_target" 2>/dev/null); then
+    _wd=${_res%%"$TAB"*}
+    [ -n "$_acc" ] || _acc=${_res#*"$TAB"}
+  else
+    if [ "$_target" = "." ]; then _wd="$(pwd)"; else _wd="$_target"; fi
+    _wd=$(posix_path "$_wd")
+    [ -d "$_wd" ] || die "No encuentro el proyecto ni el directorio: $_target"
+    _wd="$(cd "$_wd" && pwd)"
+  fi
+  [ -n "$_acc" ] || _acc="$(get_active)"
+  [ -n "$_acc" ] || die "No hay cuenta. Usa --account <cuenta>."
+  account_exists "$_acc" || die "La cuenta '$_acc' no existe."
+  check_claude
+
+  if [ -f "$TEMPLATES_DIR/bootstrap-prompt.md" ]; then
+    _prompt=$(cat "$TEMPLATES_DIR/bootstrap-prompt.md")
+  else
+    _prompt="$DEFAULT_BOOTSTRAP_PROMPT"
+  fi
+
+  cd "$_wd"
+  export CLAUDE_CONFIG_DIR="$(native_path "$(account_dir "$_acc")")"
+  info "Generando memoria con Claude en: $_wd  (cuenta: $_acc)"
+  if [ "$_headless" = 1 ]; then
+    claude -p "$_prompt"
+    ok "Memoria generada (modo headless)."
+  else
+    exec claude "$_prompt"
+  fi
+}
+
+cmd_doctor() {
+  msg "${C_B}ccx $CCX_VERSION${C_R}"
+  msg "CCX_HOME:   $CCX_HOME"
+  msg "Templates:  $TEMPLATES_DIR"
+  if have claude; then ok "claude encontrado: $(command -v claude)"; else warn "claude NO está en el PATH"; fi
+  if [ -n "${MSYSTEM:-}" ]; then
+    if have cygpath; then ok "Git Bash/MSYS detectado (cygpath disponible)"; else warn "MSYS sin cygpath: las rutas de Windows pueden fallar"; fi
+  fi
+  _n=0
+  if [ -d "$ACCOUNTS_DIR" ]; then for d in "$ACCOUNTS_DIR"/*; do [ -d "$d" ] && _n=$((_n+1)); done; fi
+  msg "Cuentas: $_n   |   Activa: $(get_active || echo '(ninguna)')"
+}
+
+# --- Prompt de memoria por defecto (fallback si falta el template) -----------
+DEFAULT_BOOTSTRAP_PROMPT=$(cat <<'EOF'
+Eres el asistente de este proyecto. Analiza el repositorio del directorio actual
+y crea los archivos de memoria para Claude Code. Pasos:
+
+1. Explora primero: lista los archivos y lee los que describan el proyecto
+   (README, package.json, pyproject.toml, go.mod, Cargo.toml, composer.json,
+   docker-compose.yml, etc.). No inventes nada que no puedas verificar.
+
+2. Crea un archivo CLAUDE.md en la raíz, de como máximo ~150 líneas, con:
+   - Qué es el proyecto (1-2 frases).
+   - Stack y versiones principales.
+   - Comandos clave: build, test, lint, run/dev.
+   - Estructura de carpetas relevante.
+   - Convenciones del código (estilo, imports, nombres, tests).
+   - Notas o gotchas importantes.
+   Donde no tengas información, deja la sección marcada como "TODO".
+
+3. Si el proyecto es grande, además divide por temas en .claude/rules/*.md
+   (por ejemplo testing.md, api.md), usando frontmatter con `paths:` cuando aplique.
+
+Al terminar, muéstrame un resumen corto de los archivos que creaste.
+EOF
+)
+
+# =============================================================================
+# Ayuda
+# =============================================================================
+show_help() {
+  cat <<EOF
+${C_B}ccx${C_R} ${C_D}v$CCX_VERSION${C_R} — varias cuentas de Claude Code + proyectos, desde la terminal.
+
+${C_B}CUENTAS${C_R} (cada una es un login aislado)
+  ccx account add <nombre>      Crea la cuenta y abre el login de Claude
+  ccx account ls                Lista las cuentas (* = activa)
+  ccx account use <nombre>      Fija la cuenta activa por defecto
+  ccx account which             Muestra la cuenta activa
+  ccx account rm <nombre>       Elimina la cuenta y su login
+
+${C_B}PROYECTOS${C_R}
+  ccx project add <n> [ruta]    Registra un proyecto (ruta = actual si se omite)
+                                opcional: --account <cuenta>
+  ccx project ls                Lista los proyectos
+  ccx project rm <n>            Quita el proyecto del registro
+
+${C_B}USAR${C_R}
+  ccx open <proyecto> [-- ...]  Abre Claude en el proyecto, con su cuenta
+  ccx <proyecto>                Atajo de 'ccx open <proyecto>'
+  ccx run [cuenta] [-- ...]     Abre Claude aquí (carpeta actual) con esa cuenta
+  ccx init [proyecto|.] [-p]    Pide a Claude que genere los archivos de memoria
+                                (-p / --headless: sin sesión interactiva)
+
+${C_B}OTROS${C_R}
+  ccx doctor                    Diagnóstico del entorno
+  ccx version                   Versión
+  ccx help                      Esta ayuda
+
+${C_D}Datos en: $CCX_HOME${C_R}
+EOF
+}
+
+# =============================================================================
+# Dispatch
+# =============================================================================
+main() {
+  _cmd="${1:-help}"
+  if [ $# -gt 0 ]; then shift; fi
+  case "$_cmd" in
+    account|acc|a)
+      _sub="${1:-ls}"; if [ $# -gt 0 ]; then shift; fi
+      case "$_sub" in
+        add)              cmd_account_add "$@" ;;
+        ls|list)          cmd_account_ls ;;
+        rm|remove|del)    cmd_account_rm "$@" ;;
+        use)              cmd_account_use "$@" ;;
+        which|active)     cmd_account_which ;;
+        *) die "Subcomando de account desconocido: $_sub (ccx help)" ;;
+      esac ;;
+    project|proj|p)
+      _sub="${1:-ls}"; if [ $# -gt 0 ]; then shift; fi
+      case "$_sub" in
+        add)              cmd_project_add "$@" ;;
+        ls|list)          cmd_project_ls ;;
+        rm|remove|del)    cmd_project_rm "$@" ;;
+        *) die "Subcomando de project desconocido: $_sub (ccx help)" ;;
+      esac ;;
+    open|o)              cmd_open "$@" ;;
+    run|r)               cmd_run "$@" ;;
+    init|bootstrap)      cmd_init "$@" ;;
+    doctor)              cmd_doctor ;;
+    version|--version|-v) msg "ccx $CCX_VERSION" ;;
+    help|--help|-h|'')   show_help ;;
+    *)
+      # Atajo: 'ccx <proyecto>' abre ese proyecto si está registrado
+      if project_lookup "$_cmd" >/dev/null 2>&1; then
+        cmd_open "$_cmd" "$@"
+      else
+        die "Comando desconocido: $_cmd  (prueba: ccx help)"
+      fi ;;
+  esac
+}
+
+main "$@"
