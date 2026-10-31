@@ -1,147 +1,190 @@
-# ccx
+```text
+ ██████╗ ██████╗██╗  ██╗
+██╔════╝██╔════╝╚██╗██╔╝
+██║     ██║      ╚███╔╝
+██║     ██║      ██╔██╗
+╚██████╗╚██████╗██╔╝ ██╗
+ ╚═════╝ ╚═════╝╚═╝  ╚═╝
+```
 
-**Varias cuentas de Claude Code en el mismo PC, proyectos locales y memoria autogenerada — todo desde la terminal.**
+<!-- ¿Prefieres un logo en vez de arte ASCII? Crea assets/logo-light.svg y
+     assets/logo-dark.svg, borra el bloque de arriba y descomenta esto:
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+    <img alt="ccx logo" src="assets/logo-light.svg" width="200">
+  </picture>
+</div>
+-->
 
-`ccx` es un lanzador minimalista (un único script POSIX, sin dependencias) que te deja:
+<div align="center">
 
-- Tener **varias cuentas / sesiones de Claude Code** aisladas en la misma máquina, sin tocar configuraciones a mano.
-- **Registrar proyectos locales** y abrir cada uno con la cuenta correcta en un solo comando.
-- Pedirle al **propio Claude que genere los archivos de memoria** (`CLAUDE.md`, `.claude/rules/*.md`) de un proyecto.
+<em>Varias cuentas de Claude Code en el mismo PC, sin fricción.</em>
 
-Funciona en **Linux**, **WSL** y **Git Bash** (Windows).
+<p>
+
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-222222?style=flat-square" alt="MIT license"></a>
+<img src="https://img.shields.io/badge/shell-POSIX%20sh-222222?style=flat-square&logo=gnu-bash&logoColor=white" alt="POSIX sh">
+<img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-222222?style=flat-square" alt="Platforms">
+<img src="https://img.shields.io/badge/dependencies-none-222222?style=flat-square" alt="No dependencies">
+<a href="#-contribuir"><img src="https://img.shields.io/badge/PRs-welcome-222222?style=flat-square" alt="PRs welcome"></a>
+<a href="https://github.com/TU-USUARIO/ccx/stargazers"><img src="https://img.shields.io/github/stars/TU-USUARIO/ccx?style=flat-square&color=222222&label=stars" alt="Stars"></a>
+
+</p>
+
+<sub>
+<a href="#-features">Features</a> ·
+<a href="#-quick-start">Quick start</a> ·
+<a href="#-instalación">Instalación</a> ·
+<a href="#-comandos">Comandos</a> ·
+<a href="#-cómo-funciona">Cómo funciona</a> ·
+<a href="#%EF%B8%8F-limitaciones">Limitaciones</a>
+</sub>
+
+</div>
+
+<!-- Cuando grabes el demo (ver README del repo / guía), descomenta esto:
+<p align="center">
+  <img src="assets/demo.gif" alt="Demo de ccx: añadir cuentas, cambiar de cuenta y abrir un proyecto" width="700">
+</p>
+-->
 
 ---
 
-## ¿Cómo funciona por debajo?
+**ccx** gestiona varias cuentas y sesiones de **Claude Code** en una sola máquina. Claude Code guarda su configuración, historial, plugins y credenciales de login en un directorio; con la variable `CLAUDE_CONFIG_DIR`, ese directorio se puede cambiar. ccx le da a **cada cuenta su propio directorio aislado**, recuerda tus proyectos locales (nombre → ruta → cuenta), mantiene una cuenta activa y exporta la variable correcta antes de lanzar `claude`. Un solo script POSIX `sh`, cero dependencias, Linux y Windows (Git Bash / WSL).
 
-Claude Code respeta la variable de entorno **`CLAUDE_CONFIG_DIR`**. Cuando está definida, guarda *todo* bajo ese directorio en lugar de `~/.claude`: settings, historial de sesiones, plugins **y las credenciales de login**. Dándole a cada cuenta su propio directorio, cada una mantiene su propia sesión de claude.ai o su propia API key, de forma independiente.
+## ✨ Features
 
-`ccx` no es más que un envoltorio ergonómico sobre eso: mantiene un directorio por cuenta, un registro de proyectos, y exporta la variable correcta antes de lanzar `claude`. Nada de magia ni parches.
+| | Feature | Qué hace |
+|---|---|---|
+| 🔑 | **Cuentas aisladas** | Cada cuenta vive en su propio `CLAUDE_CONFIG_DIR`: settings, historial, plugins y login separados. |
+| 🔀 | **Cambio instantáneo** | `ccx account use <nombre>` y la siguiente sesión de Claude arranca con esa identidad. |
+| 📁 | **Registro de proyectos** | Asocia cada proyecto local (nombre → ruta → cuenta) y ábrelo con un comando. |
+| 🚀 | **Atajo de apertura** | `ccx <proyecto>` entra a la carpeta y lanza Claude con la cuenta correcta. |
+| 🧠 | **`ccx init`** | Lanza Claude con un prompt para que genere los archivos de memoria del proyecto (`CLAUDE.md`, `.claude/rules/*.md`). |
+| 🩺 | **`ccx doctor`** | Diagnostica tu instalación y detecta problemas de configuración. |
+| 🪶 | **Sin dependencias** | Un único script POSIX `sh`. Nada de Node, Python ni paquetes externos. |
+| 🖥️ | **Multiplataforma** | Linux y Windows vía Git Bash o WSL. |
 
-```
-~/.config/ccx/
-├── accounts/
-│   ├── personal/      ← esto es un CLAUDE_CONFIG_DIR
-│   └── trabajo/       ← y esto otro
-├── projects.tsv       ← nombre  →  ruta  →  cuenta
-└── active             ← cuenta por defecto
-```
-
-> **macOS:** aunque el objetivo son Linux y Windows, también funcionaría en macOS. Claude Code indexa la entrada del Keychain según `CLAUDE_CONFIG_DIR`, así que el aislamiento se mantiene allí también.
-
----
-
-## Instalación
+## 🚀 Quick start
 
 ```sh
-git clone https://github.com/<tu-usuario>/ccx.git
+# 1. Añade tus cuentas (cada una se aísla en su propio directorio)
+ccx account add trabajo
+ccx account add personal
+
+# 2. Elige la cuenta activa
+ccx account use personal
+
+# 3. Registra un proyecto local
+ccx project add miapp ~/code/miapp
+
+# 4. Ábrelo: entra a la carpeta y lanza Claude con la cuenta correcta
+ccx miapp
+```
+
+Eso es todo. `ccx` exporta el `CLAUDE_CONFIG_DIR` adecuado y arranca `claude` por ti.
+
+## 📦 Instalación
+
+```sh
+git clone https://github.com/TU-USUARIO/ccx.git
 cd ccx
 sh install.sh
 ```
 
-El instalador copia el script a `~/.ccx/bin`. Si ese directorio no está en tu `PATH`, te lo indicará:
+El instalador copia `ccx` a `~/.ccx/bin`. Añade esa carpeta a tu `PATH` si el instalador no lo hace por ti:
 
 ```sh
-export PATH="$HOME/.ccx/bin:$PATH"   # añádelo a ~/.bashrc o ~/.zshrc
+export PATH="$HOME/.ccx/bin:$PATH"   # añádelo a tu ~/.bashrc, ~/.zshrc o ~/.profile
 ```
 
-Comprueba que todo está bien:
+Verifica la instalación:
 
 ```sh
 ccx doctor
 ```
 
+> [!NOTE]
 > Requiere [Claude Code](https://code.claude.com/docs/en/setup) instalado y accesible como `claude`.
-> En **Windows**, usa `ccx` dentro de **Git Bash** o **WSL** (donde `claude` queda en el PATH).
 
----
+<details>
+<summary><strong>Notas para Windows</strong></summary>
 
-## Uso
+ccx es un script POSIX `sh`, así que en Windows se ejecuta dentro de **Git Bash** o **WSL**. Clona e instala desde esa misma terminal. Las rutas de proyecto deben ser las que vea el shell POSIX (por ejemplo `/c/Users/tu-usuario/code/miapp` en Git Bash, o rutas de Linux en WSL).
 
-### 1. Crear cuentas
+</details>
 
-```sh
-ccx account add personal     # crea la cuenta y abre el login en el navegador
-ccx account add trabajo
-ccx account ls               # lista las cuentas; * marca la activa
-```
+## 🧭 Comandos
 
-Cada `account add` abre Claude Code una vez para que inicies sesión. Al terminar, escribe `/exit`.
-
-### 2. Registrar proyectos
-
-```sh
-cd ~/code/mi-api
-ccx project add mi-api --account trabajo    # usa la ruta actual
-ccx project add web ~/code/landing --account personal
-ccx project ls
-```
-
-### 3. Abrir un proyecto
-
-```sh
-ccx open mi-api        # entra a la carpeta y lanza Claude con la cuenta 'trabajo'
-ccx mi-api             # atajo equivalente
-ccx open mi-api -- --model claude-opus-5-5   # pasa flags a claude tras el --
-```
-
-¿Solo quieres lanzar Claude aquí con una cuenta, sin registrar nada?
-
-```sh
-ccx run personal
-ccx run                # usa la cuenta activa
-```
-
-### 4. Generar los archivos de memoria con Claude
-
-```sh
-ccx init mi-api            # Claude analiza el repo y crea CLAUDE.md (+ rules si aplica)
-ccx init .                 # sobre la carpeta actual
-ccx init mi-api --headless # sin sesión interactiva (claude -p)
-```
-
-Usa la plantilla de [`templates/bootstrap-prompt.md`](templates/bootstrap-prompt.md); edítala a tu gusto.
-
----
-
-## Comandos
-
-| Comando | Qué hace |
+| Comando | Descripción |
 |---|---|
-| `ccx account add <n>` | Crea la cuenta y abre el login |
-| `ccx account ls` | Lista las cuentas (`*` = activa) |
-| `ccx account use <n>` | Fija la cuenta activa |
-| `ccx account which` | Muestra la cuenta activa |
-| `ccx account rm <n>` | Elimina la cuenta y su login |
-| `ccx project add <n> [ruta] [--account <c>]` | Registra un proyecto |
-| `ccx project ls` | Lista los proyectos |
-| `ccx project rm <n>` | Quita el proyecto del registro |
-| `ccx open <p> [-- ...]` | Abre Claude en el proyecto, con su cuenta |
-| `ccx <p>` | Atajo de `ccx open <p>` |
-| `ccx run [cuenta] [-- ...]` | Abre Claude en la carpeta actual |
-| `ccx init [p\|.] [--headless]` | Genera los archivos de memoria con Claude |
-| `ccx doctor` | Diagnóstico del entorno |
-| `ccx version` · `ccx help` | Versión / ayuda |
+| `ccx account add <nombre>` | Crea una cuenta con su directorio de config aislado y abre el login. |
+| `ccx account ls` | Lista las cuentas y marca la activa. |
+| `ccx account use <nombre>` | Define la cuenta activa. |
+| `ccx account which` | Muestra qué cuenta está activa. |
+| `ccx account rm <nombre>` | Elimina una cuenta. |
+| `ccx project add <nombre> [ruta]` | Registra un proyecto (nombre → ruta → cuenta). |
+| `ccx project ls` | Lista los proyectos registrados. |
+| `ccx project rm <nombre>` | Elimina un proyecto del registro. |
+| `ccx open <proyecto>` | Entra a la carpeta del proyecto y lanza Claude con su cuenta. |
+| `ccx <proyecto>` | Atajo de `ccx open <proyecto>`. |
+| `ccx run [cuenta]` | Lanza Claude en la carpeta actual con la cuenta activa (o la indicada). |
+| `ccx init [proyecto] [--headless]` | Lanza Claude para generar los archivos de memoria del proyecto. |
+| `ccx doctor` | Diagnostica la instalación y la configuración. |
+| `ccx version` | Muestra la versión. |
+| `ccx help` | Muestra la ayuda. |
 
----
+## 🔧 Cómo funciona
 
-## Variables de entorno
+Claude Code lee la variable `CLAUDE_CONFIG_DIR`. Si está definida, guarda **todo** su estado (settings, historial, plugins y credenciales de login) dentro de ese directorio. ccx aprovecha esto para dar a cada cuenta un sandbox propio y apuntar `claude` al correcto antes de lanzarlo.
 
-| Variable | Por defecto | Para qué |
-|---|---|---|
-| `CCX_HOME` | `~/.config/ccx` | Dónde guarda `ccx` sus datos |
-| `CCX_PREFIX` | `~/.ccx` | Dónde instala el script `install.sh` |
-| `NO_COLOR` | — | Si está definida, desactiva colores |
+```
+            ccx (un solo script sh)
+                     │
+      ┌──────────────┼───────────────┐
+      ▼              ▼                ▼
+  cuentas        proyectos       cuenta activa
+  (registro)     (registro)       (puntero)
+      │              │                │
+      │   nombre → ruta → cuenta      │
+      └──────────────┴────────────────┘
+                     │
+           ccx open <proyecto>
+                     │
+       export CLAUDE_CONFIG_DIR=~/.ccx/accounts/<cuenta>
+                     │
+                     ▼
+                 claude  ──▶  usa settings, historial,
+                              plugins y login de ESA cuenta
+```
 
----
+Cambiar de cuenta es, literalmente, apuntar `CLAUDE_CONFIG_DIR` a otra carpeta. Nada se mezcla entre cuentas.
 
-## Limitaciones conocidas
+## ⚠️ Limitaciones
 
-- **Logins "keyless" de Claude Console** (perfiles de Anthropic): Claude Code los guarda *fuera* de `CLAUDE_CONFIG_DIR`, así que ese tipo concreto de sesión no se aísla entre cuentas. Las suscripciones **claude.ai (Pro/Max/Team)** y las **API keys** sí se aíslan por completo.
-- En **Windows nativo** (cmd/PowerShell) hace falta un wrapper aparte; por ahora, úsalo en Git Bash o WSL.
+> [!IMPORTANT]
+> **Los logins keyless de Claude Console no se aíslan.** El aislamiento de ccx se basa en `CLAUDE_CONFIG_DIR`, que cubre las credenciales que Claude Code guarda en ese directorio. Un login "keyless" de Claude Console se almacena fuera de ese directorio, así que queda fuera del sandbox y se comparte entre cuentas. Las suscripciones claude.ai (Pro/Max/Team) y las API keys sí se aíslan por completo.
 
----
+- Requiere que `claude` (Claude Code) ya esté instalado y disponible en el `PATH`.
+- En Windows necesitas un entorno POSIX (Git Bash o WSL); no corre en `cmd.exe` ni PowerShell nativo.
+- El aislamiento llega hasta donde llega `CLAUDE_CONFIG_DIR`: lo que Claude Code guarde fuera de ese directorio no queda separado por cuenta.
 
-## Licencia
+## 🤝 Contribuir
 
-MIT © 2026 Juan Diego Escobar ([@Trivi](https://github.com/))
+Los PRs son bienvenidos. Antes de enviar:
+
+- Mantén el estilo **POSIX `sh`** (nada de bashismos): el objetivo es correr en cualquier `sh`.
+- Pasa [`shellcheck`](https://www.shellcheck.net/) sobre el script.
+- Prueba en Linux y, si puedes, en Git Bash/WSL.
+
+Lee [CONTRIBUTING.md](CONTRIBUTING.md) para más detalles y abre un issue si encuentras un bug o tienes una idea.
+
+## 📄 Licencia
+
+[MIT](LICENSE) © Juan Diego Escobar ([@Trivi](https://github.com/TU-USUARIO))
+
+<div align="center">
+<sub>Hecho con ☕ por <a href="https://github.com/TU-USUARIO">@Trivi</a></sub>
+</div>
